@@ -1,1 +1,727 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoEQ Calibrator • Ecualizador por Espectrómetro (Web)</title>
+  <style>
+    :root { --bg:#f7f7fb; --fg:#0f172a; --muted:#6b7280; --card:#fff; --accent:#2563eb; --ok:#059669; }
+    *{ box-sizing: border-box; }
+    body{ margin:0; background:var(--bg); color:var(--fg); font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    .container{ max-width: 1100px; margin: 0 auto; padding: 20px; }
+    h1{ font-size: clamp(22px, 2.6vw, 32px); margin: 0 0 4px; }
+    h2{ font-size: 20px; margin: 12px 0; }
+    .muted{ color: var(--muted); }
+    .card{ background:var(--card); border-radius: 16px; box-shadow: 0 4px 16px rgba(0,0,0,.06); padding: 16px; }
+    .row{ display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    .btn{ appearance: none; border:0; background:var(--accent); color:#fff; padding:10px 14px; border-radius:14px; cursor:pointer; font-weight:600; }
+    .btn.secondary{ background:#e5e7eb; color:#111; }
+    .btn.ok{ background:var(--ok); }
+    input[type="number"], input[type="text"], select, textarea{ width: 100%; max-width: 360px; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; }
+    textarea{ height: 80px; }
+    .stepper{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+    .stepper button{ background:#fff; border:1px solid #e5e7eb; color:#111; padding:8px 12px; border-radius:12px; }
+    .stepper button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+    table{ width:100%; border-collapse: collapse; }
+    th, td{ text-align:left; padding:8px 10px; border-bottom:1px solid #eee; font-size: 14px; }
+    code.badge{ background:#eef2ff; color:#3730a3; padding:2px 6px; border-radius:8px; font-size:12px; }
+    canvas{ width: 100%; height: 240px; background:#fff; border:1px solid #eee; border-radius:12px; }
+    .pill{ background:#f3f4f6; padding:6px 10px; border-radius:12px; font-size: 13px; }
+    .grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header style="margin-bottom:12px;">
+      <h1>AutoEQ Calibrator • Ecualizador por Espectrómetro</h1>
+      <div class="muted">Genera tonos, mide con tu micrófono y te dice cuánto mover cada banda para aplanar la respuesta (objetivo relativo ≈ -6 dB).</div>
+    </header>
+
+    <div class="row" style="gap:16px; margin: 12px 0 16px;">
+      <button class="btn" id="btn-init">Iniciar audio / Mic</button>
+
+      <!-- Selector de micrófono (nuevo, no rompe nada existente) -->
+      <div class="row" style="gap:8px;">
+        <label class="muted" for="micSelect">Micrófono</label>
+        <select id="micSelect" style="max-width:260px;">
+          <option value="">(predeterminado)</option>
+        </select>
+        <button class="btn secondary" id="refreshMics" type="button">Actualizar</button>
+      </div>
+
+      <div class="row" style="gap:8px;">
+        <label for="volume" class="muted">Volumen de tono</label>
+        <input type="range" id="volume" min="0.02" max="1" step="0.01" value="0.2" />
+        <span id="volPct" class="pill">20%</span>
+      </div>
+
+      <div class="row" style="gap:8px;">
+        <label class="muted" for="target">Objetivo plano</label>
+        <select id="target">
+          <option value="-6" selected>-6 dB (recomendado)</option>
+          <option value="-3">-3 dB</option>
+          <option value="-9">-9 dB</option>
+        </select>
+      </div>
+
+      <!-- Límite ±dB real del estéreo -->
+      <div class="row" style="gap:8px;">
+        <label class="muted" for="eqRange">Rango EQ</label>
+        <select id="eqRange">
+          <option value="6">±6 dB</option>
+          <option value="9" selected>±9 dB</option>
+          <option value="12">±12 dB</option>
+          <option value="15">±15 dB</option>
+          <option value="custom">Otro…</option>
+        </select>
+        <input type="number" id="eqRangeCustom" min="3" max="24" step="1" placeholder="±dB" style="display:none; max-width:90px;">
+      </div>
+
+      <!-- Resolución (paso) y modo de redondeo -->
+      <div class="row" style="gap:8px;">
+        <label class="muted" for="eqStep">Resolución</label>
+        <select id="eqStep">
+          <option value="1" selected>1.0 dB</option>
+          <option value="0.5">0.5 dB</option>
+          <option value="0.1">0.1 dB</option>
+          <option value="custom">Otro…</option>
+        </select>
+        <input type="number" id="eqStepCustom" min="0.1" max="6" step="0.1" placeholder="paso dB" style="display:none; max-width:100px;">
+        <select id="eqRound">
+          <option value="nearest" selected>Redondeo: más cercano</option>
+          <option value="down">hacia abajo</option>
+          <option value="up">hacia arriba</option>
+        </select>
+      </div>
+
+      <label class="row" style="gap:6px;">
+        <input type="checkbox" id="toggle-spectrum" checked />
+        <span class="muted">Espectro en vivo</span>
+      </label>
+    </div>
+
+    <div class="card">
+      <nav class="stepper">
+        <button data-step="1" class="active">Paso 1</button>
+        <button data-step="2">Paso 2</button>
+        <button data-step="3">Paso 3</button>
+        <button data-step="4">Paso 4</button>
+        <button data-step="5">Paso 5</button>
+      </nav>
+
+      <!-- Paso 1 -->
+      <section id="step-1">
+        <h2>1) Define tus bandas</h2>
+        <p class="muted">¿Cuántas bandas son? Puedes usar centros ISO típicos o personalizar.</p>
+        <div class="row">
+          <div>
+            <label>Número de bandas</label>
+            <input type="number" id="numBands" min="3" max="31" value="10" />
+            <div class="row" style="margin-top:8px;">
+              <label class="row" style="gap:6px;">
+                <input type="checkbox" id="useCustom" />
+                <span class="muted">Usar frecuencias personalizadas (CSV/espacios)</span>
+              </label>
+            </div>
+            <textarea id="customFreqs" placeholder="Ej: 31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000" style="display:none;"></textarea>
+            <div class="muted" style="font-size:12px; margin-top:6px;">Si no personalizas, usamos ISO típicas según el número de bandas.</div>
+          </div>
+          <div style="flex:1; min-width:280px;">
+            <h3 style="margin:0 0 6px;">Centros actuales (Hz)</h3>
+            <div id="centers" class="row" style="gap:8px; flex-wrap:wrap;"></div>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <button class="btn" id="to-2">Continuar a identificación</button>
+        </div>
+      </section>
+
+      <!-- Paso 2 -->
+      <section id="step-2" style="display:none;">
+        <h2>2) Identifica cada banda (micrófono)</h2>
+        <p class="muted">Para mapear tu ecualizador real: <b>baja TODAS las bandas al mínimo</b>. Luego, por banda: <b>sube solo esa banda al máximo</b> y pulsa <b>Auto detectar (mic)</b>. La app hace un barrido y detecta el <i>pico</i> y el <i>rango (-6 dB)</i> automáticamente. Al terminar, pon todo en 0 dB y continúa al Paso 3.</p>
+
+        <div class="card" id="guideBox" style="margin-bottom:10px;">
+          <div class="row" style="justify-content:space-between;">
+            <div><b>Modo guiado de identificación</b></div>
+            <div class="pill">Banda actual: <b id="guideBand">1</b>/<span id="guideTotal">10</span></div>
+          </div>
+          <div class="muted" style="margin:6px 0 8px;">Ahora <b>sube al máximo la Banda <span id="guideBand2">1</span></b> en tu autoestéreo (las demás al mínimo). Luego dale a <b>Auto detectar (mic)</b>. Cuando termine, paso a la siguiente automáticamente.</div>
+          <div class="row" style="gap:8px; margin-bottom:6px;">
+            <button class="btn ok" id="guide-auto">Auto detectar (mic)</button>
+            <button class="btn secondary" id="guide-cancel">Cancelar</button>
+            <button class="btn" id="guide-repeat">Repetir banda</button>
+            <button class="btn secondary" id="guide-skip">Omitir banda</button>
+          </div>
+          <div class="pill">Frecuencia actual del barrido: <b id="curFreq">0</b> Hz</div>
+        </div>
+
+        <div id="identifyGrid" class="grid"></div>
+        <div style="margin-top:10px;" class="row">
+          <button class="btn" id="to-3">Continuar</button>
+          <span class="muted" style="font-size:12px;">Consejo: al finalizar, vuelve todas las bandas a 0 dB (plano).</span>
+        </div>
+      </section>
+
+      <!-- Paso 3 -->
+      <section id="step-3" style="display:none;">
+        <h2>3) Aplana todo</h2>
+        <p class="muted">Pon el ecualizador <b>PLANO (0 dB)</b> en todas las bandas y deja el volumen fijo. Luego mide cada banda con su tono dedicado.</p>
+        <div class="row" style="margin:8px 0 10px;">
+          <button class="btn secondary" id="reminder">Recordatorio</button>
+          <button class="btn ok" id="measure-all">Medir TODAS las bandas</button>
+        </div>
+        <div id="measureGrid" class="grid"></div>
+        <div style="margin-top:10px;">
+          <button class="btn" id="to-4">Ver recomendaciones</button>
+        </div>
+      </section>
+
+      <!-- Paso 4 -->
+      <section id="step-4" style="display:none;">
+        <h2>4) Recomendaciones de ajuste por banda</h2>
+        <p class="muted">Calculamos diferencias relativas usando la mediana como línea plana. Aplica estos cambios en tu autoestéreo y repite si quieres cerrar fino. Límite de sugerencia: ±<span id="limText">9</span> dB.</p>
+        <div class="card" style="padding:0; overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Banda</th>
+                <th>Centro (Hz)</th>
+                <th>Medición</th>
+                <th>Ajuste sugerido</th>
+              </tr>
+            </thead>
+            <tbody id="recBody"></tbody>
+          </table>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn" id="to-5">Verificación final</button>
+          <button class="btn ok" id="remeasure">Re-medir todo</button>
+        </div>
+      </section>
+
+      <!-- Paso 5 -->
+      <section id="step-5" style="display:none;">
+        <h2>5) Verificación con barrido / ruido</h2>
+        <p class="muted">Después de aplicar los ajustes, realiza un barrido o genera ruido multibanda para percibir una respuesta pareja. Repite medición si es necesario.</p>
+        <div class="row" style="margin:8px 0 10px;">
+          <button class="btn ok" id="start-sweep-verify">Barrido 20–20k</button>
+          <button class="btn secondary" id="stop-sweep-verify">Detener</button>
+          <button class="btn" id="multi-noise">Ruido multibanda (8s)</button>
+          <div class="pill">Frecuencia actual: <b id="curFreq2">0</b> Hz</div>
+        </div>
+        <div class="muted" style="font-size:12px;">Nota: Las mediciones son relativas; el objetivo “-6 dB” es una línea de referencia interna. Lo importante es minimizar diferencias entre bandas.</div>
+      </section>
+
+      <div style="margin-top:16px;">
+        <h3 style="margin:0 0 6px;">Espectro de micrófono (vivo)</h3>
+        <canvas id="spectrum" width="1024" height="240"></canvas>
+        <div class="muted" style="font-size:12px; margin-top:6px;">Si ves mucha variación, cierra ventanas, apaga A/C y reduce ruidos. Mantén el móvil fijo para consistencia.</div>
+      </div>
+    </div>
+
+    <footer class="muted" style="font-size:12px; margin-top:10px;">Hecho con Web Audio API. Este calibrador no sustituye un RTA profesional, pero ayuda a acercarse a una respuesta plana de forma práctica.</footer>
+  </div>
+
+  <script>
+    // ====== Utiles ======
+    function $(sel){ return document.querySelector(sel); }
+    function $$(sel){ return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+    function clamp(x,lo,hi){ return Math.max(lo, Math.min(hi, x)); }
+    function wait(ms){ return new Promise(function(res){ setTimeout(res, ms); }); }
+
+    // ====== Estado ======
+    var ac=null, sampleRate=48000, outputGain=null, micStream=null, micSource=null, analyser=null;
+    var state = {
+      step:1, numBands:10, useCustom:false, customFreqs:[],
+      centers:[], identified:[], measurements:[], recommendations:[],
+      bandLow:[], bandHigh:[], bandPeak:[],
+      bandCands:[],
+      volume:0.2, targetDb:-6, drawSpectrum:true, sweep:null,
+      eqRange: 9,                 // límite real del estéreo (±dB)
+      eqStep: 1,                  // resolución (paso) en dB
+      eqRound: 'nearest',         // modo de redondeo: nearest | down | up
+      micDeviceId: null,          // NUEVO: id de mic seleccionado
+      guide:{active:false, index:0}, auto:null
+    };
+
+    // ====== UI refs ======
+    var btnInit=$('#btn-init'), volumeSlider=$('#volume'), volPct=$('#volPct');
+    var targetSel=$('#target'), toggleSpectrum=$('#toggle-spectrum');
+    var stepButtons=$$('.stepper button');
+    var sections=[$('#step-1'),$('#step-2'),$('#step-3'),$('#step-4'),$('#step-5')];
+    var numBandsInput=$('#numBands'), useCustomChk=$('#useCustom'), customFreqsTxt=$('#customFreqs'), centersWrap=$('#centers');
+    var identifyGrid=$('#identifyGrid'), measureGrid=$('#measureGrid'), recBody=$('#recBody');
+    var to2=$('#to-2'), to3=$('#to-3'), to4=$('#to-4'), to5=$('#to-5');
+    var startSweepBtn=$('#start-sweep'), stopSweepBtn=$('#stop-sweep');
+    var startSweepVerify=$('#start-sweep-verify'), stopSweepVerify=$('#stop-sweep-verify'), multiNoiseBtn=$('#multi-noise');
+    var reminderBtn=$('#reminder'), measureAllBtn=$('#measure-all'), remeasureBtn=$('#remeasure');
+    var curFreqLbl=$('#curFreq'), curFreqLbl2=$('#curFreq2');
+    var eqRangeSel = document.getElementById('eqRange');
+    var eqRangeCustom = document.getElementById('eqRangeCustom');
+    var eqStepSel = document.getElementById('eqStep');
+    var eqStepCustom = document.getElementById('eqStepCustom');
+    var eqRoundSel = document.getElementById('eqRound');
+    var micSelect = document.getElementById('micSelect');
+    var refreshMicsBtn = document.getElementById('refreshMics');
+    var spectrum=$('#spectrum'); var g = spectrum ? spectrum.getContext('2d') : null;
+
+    // ====== Helpers ======
+    function defaultCentersFor(n){
+      if (state.useCustom && state.customFreqs.length>0) return state.customFreqs.slice(0,n);
+      if (n===5) return [60,230,910,3600,14000];
+      if (n===7) return [63,160,400,1000,2500,6300,16000];
+      if (n===10) return [31.5,63,125,250,500,1000,2000,4000,8000,16000];
+      if (n===13) return [31.5,63,100,160,250,400,630,1000,1600,2500,4000,6300,10000];
+      var fMin=31.5,fMax=16000,out=[]; for(var i=0;i<n;i++){ var t=i/(n-1); out.push(fMin*Math.pow(fMax/fMin,t)); } return out;
+    }
+    function updateCentersUI(){
+      centersWrap.innerHTML='';
+      for (var i=0;i<state.centers.length;i++){ var s=document.createElement('span'); s.className='pill'; s.textContent=state.centers[i].toFixed(1); centersWrap.appendChild(s); }
+      updateGuideUI();
+      if (sections[1].style.display !== 'none'){ renderIdentify(); }
+    }
+    function showStep(n){ state.step=n; stepButtons.forEach(function(b){ b.classList.toggle('active', parseInt(b.dataset.step,10)===n); }); sections.forEach(function(s,i){ s.style.display=(i+1===n)?'block':'none'; }); }
+    function currentCenters(){ return state.centers.map(function(f,i){ return (state.identified[i]!=null? state.identified[i] : f); }); }
+    function prettyDb(x){ return (x==null || !isFinite(x))? '—' : x.toFixed(1)+' dB'; }
+    function binForFreq(f){ var N=analyser.frequencyBinCount, binWidth=sampleRate/(2*N); var idx=Math.round(f/binWidth); if(idx<0) idx=0; if(idx>N-1) idx=N-1; return idx; }
+
+    // Redondeo a paso
+    function quantize(v, step, mode){
+      if (!isFinite(v)) return v;
+      if (!step || step <= 0) return v;
+      var q = v/step, qi;
+      if (mode === 'up') qi = Math.ceil(q);
+      else if (mode === 'down') qi = Math.floor(q);
+      else qi = Math.round(q); // nearest
+      var out = qi * step;
+      if (Math.abs(out) < 1e-6) out = 0; // evita -0
+      return Math.round(out*100)/100;   // 2 decimales máx
+    }
+
+    // ====== Micrófono: adjuntar y listar ======
+    async function attachMicStream() {
+      // Cierra stream previo
+      if (micStream) {
+        try { micStream.getTracks().forEach(t => t.stop()); } catch(e) {}
+        micStream = null;
+      }
+      var constraints = {
+        audio: {
+          deviceId: state.micDeviceId ? { exact: state.micDeviceId } : undefined,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1,
+          sampleRate: ac ? ac.sampleRate : undefined
+        },
+        video: false
+      };
+      micStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      // Reconecta analyser
+      try { if (micSource) micSource.disconnect(); } catch(e){}
+      micSource = ac.createMediaStreamSource(micStream);
+      if (!analyser) {
+        analyser = ac.createAnalyser();
+        analyser.fftSize = 16384;
+        analyser.minDecibels = -120;
+        analyser.maxDecibels = 0;
+        analyser.smoothingTimeConstant = 0.5;
+      }
+      micSource.connect(analyser);
+    }
+
+    async function listMics() {
+      try {
+        var devices = await navigator.mediaDevices.enumerateDevices();
+        var mics = devices.filter(d => d.kind === 'audioinput');
+        if (!micSelect) return;
+        var current = state.micDeviceId || '';
+        micSelect.innerHTML = '<option value="">(predeterminado)</option>';
+        mics.forEach(d => {
+          var opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.textContent = d.label || ('Micrófono ' + (micSelect.length));
+          micSelect.appendChild(opt);
+        });
+        if (current) {
+          var exists = mics.some(d => d.deviceId === current);
+          micSelect.value = exists ? current : '';
+          if (!exists) state.micDeviceId = null;
+        }
+      } catch(e){ console.warn('enumerateDevices falló:', e); }
+    }
+
+    // ====== Audio ======
+    async function initAudio(){
+      if (ac){ try{ await ac.resume(); }catch(e){} return; }
+      var Ctx = window.AudioContext || window.webkitAudioContext; ac = new Ctx({ latencyHint:'interactive' }); sampleRate=ac.sampleRate;
+      outputGain = ac.createGain(); outputGain.gain.value=state.volume; outputGain.connect(ac.destination);
+
+      try{
+        await attachMicStream();         // usa el mic seleccionado (o predeterminado)
+        await listMics();                // pobla el selector tras permiso
+        if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+          navigator.mediaDevices.addEventListener('devicechange', listMics);
+        }
+      }catch(e){ alert('No se pudo acceder al micrófono: '+e); return; }
+
+      state.centers=defaultCentersFor(state.numBands);
+      state.identified=Array(state.centers.length).fill(null);
+      state.measurements=Array(state.centers.length).fill(null);
+      state.recommendations=Array(state.centers.length).fill(null);
+      state.bandLow=Array(state.centers.length).fill(null);
+      state.bandHigh=Array(state.centers.length).fill(null);
+      state.bandPeak=Array(state.centers.length).fill(null);
+      state.bandCands=Array(state.centers.length).fill(null);
+
+      updateCentersUI();
+
+      var limTextInit = document.getElementById('limText');
+      if (limTextInit) limTextInit.textContent = String(state.eqRange);
+
+      drawSpectrumLoop();
+    }
+    async function playToneOnce(freq,seconds){ if(seconds===undefined) seconds=1.6; if(!ac||!outputGain) return; var osc=ac.createOscillator(); osc.type='sine'; osc.frequency.setValueAtTime(freq,ac.currentTime); var gn=ac.createGain(); gn.gain.setValueAtTime(0.0001,ac.currentTime); gn.gain.exponentialRampToValueAtTime(state.volume,ac.currentTime+0.2); gn.gain.setTargetAtTime(0.0001,ac.currentTime+seconds,0.15); osc.connect(gn).connect(outputGain); osc.start(); await wait((seconds+0.25)*1000); try{ osc.stop(); }catch(e){} }
+    async function measureDbAt(freq,seconds){ if(seconds===undefined) seconds=1.2; if(!ac||!analyser) return null; var N=analyser.frequencyBinCount, arr=new Float32Array(N), idx=binForFreq(freq), windowBins=3, tEnd=ac.currentTime+seconds; var sum=0,count=0; while(ac.currentTime<tEnd){ analyser.getFloatFrequencyData(arr); var local=0; for(var k=-windowBins;k<=windowBins;k++){ var ii=Math.max(0,Math.min(N-1,idx+k)); local+=arr[ii]; } local/=(windowBins*2+1); sum+=local; count++; await wait(50);} return count>0? sum/count : null; }
+    async function measureAll(){ var freqs=currentCenters(); for(var i=0;i<freqs.length;i++){ await playToneOnce(freqs[i],1.5); var d=await measureDbAt(freqs[i],1.2); state.measurements[i]=d; renderMeasureGrid(); } computeRecommendations(); renderRecs(); }
+
+    // ====== Recomendaciones (con límite ±dB + cuantización a paso) ======
+    function computeRecommendations(){
+      var vals=state.measurements.filter(function(x){ return x!=null; });
+      if(!vals.length) return;
+      var sorted=vals.slice().sort(function(a,b){ return a-b; });
+      var median=sorted[Math.floor(sorted.length/2)];
+      var lim = Number(state.eqRange || 9);
+      var step = Number(state.eqStep || 1);
+      var mode = state.eqRound || 'nearest';
+
+      state.recommendations=state.measurements.map(function(m){
+        if (m==null) return null;
+        var raw = median - m;
+        var clamped = clamp(raw, -lim, lim);
+        var q = quantize(clamped, step, mode);
+        return q;
+      });
+    }
+
+    // ====== Sweep ======
+    function startSweep(duration,fStart,fEnd){ if(duration===undefined) duration=15; if(fStart===undefined) fStart=20; if(fEnd===undefined) fEnd=20000; if(!ac||!outputGain) return; stopSweep(); var osc=ac.createOscillator(); osc.type='sine'; osc.frequency.setValueAtTime(fStart,ac.currentTime); osc.frequency.exponentialRampToValueAtTime(fEnd,ac.currentTime+duration); var gn=ac.createGain(); gn.gain.setValueAtTime(0.0001,ac.currentTime); gn.gain.exponentialRampToValueAtTime(state.volume,ac.currentTime+0.3); gn.gain.setTargetAtTime(0.0001,ac.currentTime+duration,0.2); osc.connect(gn).connect(outputGain); osc.start(); state.sweep={startTime:ac.currentTime,duration:duration,fStart:fStart,fEnd:fEnd,osc:osc}; setTimeout(function(){ stopSweep(); }, (duration+0.3)*1000); }
+    function stopSweep(){ if(state.sweep && state.sweep.osc){ try{ state.sweep.osc.stop(); }catch(e){} } state.sweep=null; }
+    function currentSweepFreq(){ if(!ac||!state.sweep) return null; var t=Math.max(0,Math.min(1,(ac.currentTime-state.sweep.startTime)/state.sweep.duration)); return state.sweep.fStart*Math.pow(state.sweep.fEnd/state.sweep.fStart,t); }
+
+    // ====== Dibujo espectro ======
+    function drawSpectrumLoop(){
+      if(!g || !spectrum){ requestAnimationFrame(drawSpectrumLoop); return; }
+      if(!state.drawSpectrum || !analyser){ requestAnimationFrame(drawSpectrumLoop); return; }
+      var N=analyser.frequencyBinCount, arr=new Float32Array(N), W=spectrum.width, H=spectrum.height; analyser.getFloatFrequencyData(arr);
+      g.clearRect(0,0,W,H);
+      g.strokeStyle='#e5e7eb'; g.lineWidth=1;
+      for(var y=0;y<=6;y++){ var yy=(H*y)/6; g.beginPath(); g.moveTo(0,yy); g.lineTo(W,yy); g.stroke(); }
+      g.strokeStyle='#111827'; g.lineWidth=1.2; g.beginPath();
+      for(var i=0;i<N;i++){
+        var f=(i*sampleRate)/(2*N);
+        var x=(Math.log10(Math.max(20,f))-Math.log10(20))/(Math.log10(sampleRate/2)-Math.log10(20));
+        var X=x*W;
+        var db=arr[i];
+        var yVal=((db-analyser.minDecibels)/(analyser.maxDecibels-analyser.minDecibels))*H;
+        var Y=H-Math.max(0,Math.min(H,yVal));
+        if(i===0) g.moveTo(0,Y); else g.lineTo(X,Y);
+      }
+      g.stroke();
+      g.fillStyle='#2563eb';
+      currentCenters().forEach(function(fc){
+        var X=((Math.log10(fc)-Math.log10(20))/(Math.log10(sampleRate/2)-Math.log10(20)))*W;
+        g.fillRect(X-1,0,2,H);
+      });
+      requestAnimationFrame(drawSpectrumLoop);
+    }
+
+    // ====== Paso 2: tarjetas con candidatos ======
+    function renderIdentify(){
+      identifyGrid.innerHTML='';
+      state.centers.forEach(function(f,i){
+        var div=document.createElement('div'); div.className='card'; div.style.padding='12px';
+        var assigned = (state.identified[i]!=null? state.identified[i] : f);
+        var rangeTxt = (state.bandLow[i] && state.bandHigh[i])? (Number(state.bandLow[i]).toFixed(0)+'–'+Number(state.bandHigh[i]).toFixed(0)+' Hz') : '—';
+
+        var cands = state.bandCands[i] || [];
+        var candHtml = '<div class="muted" id="cand-'+i+'" style="margin-top:6px; font-size:12px;">';
+        for (var k=0;k<Math.min(3,cands.length);k++){
+          var ff = cands[k];
+          candHtml += '<button class="btn secondary" data-cand="'+i+'|'+ff.toFixed(1)+'" style="padding:4px 8px; border-radius:10px; font-size:12px; margin-right:6px;">'+ff.toFixed(0)+' Hz</button>';
+        }
+        candHtml += '</div>';
+
+        div.innerHTML =
+          '\n<div class="row" style="justify-content:space-between;">'
+          +'<div><b>Banda '+(i+1)+'</b></div>'
+          +'<div class="muted" style="font-size:12px;">centro estimado: '+f.toFixed(1)+' Hz</div>'
+          +'</div>'
+          +'<div class="muted" style="margin-top:6px; font-size:13px;">Asignado: <b id="asig-'+i+'">'+assigned.toFixed(1)+' Hz</b></div>'
+          +'<div class="muted" style="margin-top:4px; font-size:12px;">Rango (-6 dB): <b id="range-'+i+'">'+rangeTxt+'</b></div>'
+          + candHtml;
+
+        identifyGrid.appendChild(div);
+      });
+
+      identifyGrid.onclick = function(e){
+        var t=e.target; if (!t || !t.dataset) return;
+        if (t.dataset.cand){
+          var parts=t.dataset.cand.split('|');
+          var bi=parseInt(parts[0],10);
+          var ff=parseFloat(parts[1]);
+          state.identified[bi]=ff;
+          var lab=document.getElementById('asig-'+bi);
+          if(lab) lab.textContent = ff.toFixed(1)+' Hz';
+        }
+      };
+
+      updateGuideUI();
+    }
+
+    // ====== Paso 3: mediciones ======
+    function renderMeasureGrid(){
+      measureGrid.innerHTML='';
+      currentCenters().forEach(function(f,i){
+        var d = state.measurements[i];
+        var div=document.createElement('div'); div.className='card'; div.style.padding='12px';
+        div.innerHTML =
+          '\n<div class="row" style="justify-content:space-between;">'
+          +'<div><b>Banda '+(i+1)+' — '+f.toFixed(1)+' Hz</b></div>'
+          +'<div class="muted" style="font-size:12px;">Medida: <b>'+prettyDb(d)+'</b></div>'
+          +'</div>'
+          +'<div class="row" style="margin-top:8px;">'
+          +'<button class="btn" data-tone="'+i+'">Generar tono & medir</button>'
+          +'<button class="btn secondary" data-clear="'+i+'">Limpiar medición</button>'
+          +'</div>';
+        measureGrid.appendChild(div);
+      });
+      measureGrid.onclick = async function(e){
+        var t=e.target; if (!t || !t.dataset) return;
+        if (t.dataset.tone){ var i=parseInt(t.dataset.tone,10); var f=currentCenters()[i]; await playToneOnce(f,1.5); var d=await measureDbAt(f,1.2); state.measurements[i]=d; renderMeasureGrid(); computeRecommendations(); renderRecs(); }
+        if (t.dataset.clear){ var j=parseInt(t.dataset.clear,10); state.measurements[j]=null; renderMeasureGrid(); computeRecommendations(); renderRecs(); }
+      };
+    }
+
+    function renderRecs(){
+      recBody.innerHTML='';
+      var freqs=currentCenters();
+      freqs.forEach(function(f,i){
+        var d = state.measurements[i]; var rec = state.recommendations[i];
+        var tr=document.createElement('tr');
+        var action='—'; if (rec!=null){ action = rec>0? ('SUBE '+rec.toFixed(2)+' dB') : (rec<0? ('BAJA '+Math.abs(rec).toFixed(2)+' dB') : 'OK'); }
+        tr.innerHTML = '<td>'+(i+1)+'</td><td>'+f.toFixed(1)+'</td><td>'+prettyDb(d)+'</td><td><b>'+action+'</b></td>';
+        recBody.appendChild(tr);
+      });
+    }
+
+    // ====== Auto detección por mic (barrido, guía) ======
+    var freqBuf=null;
+    function ensureFreqBuf(){ if(!analyser) return; if(!freqBuf || freqBuf.length!==analyser.frequencyBinCount) freqBuf=new Float32Array(analyser.frequencyBinCount); }
+    function sampleDbAt(freq){ if(!analyser) return null; ensureFreqBuf(); analyser.getFloatFrequencyData(freqBuf); var N=analyser.frequencyBinCount, idx=binForFreq(freq), windowBins=3, sum=0; for(var k=-windowBins;k<=windowBins;k++){ var ii=Math.max(0,Math.min(N-1,idx+k)); sum+=freqBuf[ii]; } return sum/(windowBins*2+1); }
+
+    var guideBandLbl=$('#guideBand'), guideBandLbl2=$('#guideBand2'), guideTotalLbl=$('#guideTotal');
+    var guideAutoBtn=$('#guide-auto'), guideCancelBtn=$('#guide-cancel'), guideRepeatBtn=$('#guide-repeat'), guideSkipBtn=$('#guide-skip');
+    function updateGuideUI(){ if(!guideBandLbl||!guideBandLbl2||!guideTotalLbl) return; var total=state.centers.length, idx=Math.min(state.guide.index, Math.max(0,total-1)); guideBandLbl.textContent=String(idx+1); guideBandLbl2.textContent=String(idx+1); guideTotalLbl.textContent=String(total); }
+
+    function startAutoDetectForBand(i){
+      if(!ac||!analyser){ alert('Activa el audio/mic primero.'); return; }
+      state.auto={ i:i, active:true, samples:[], finishTimer:null };
+      var dur=20; // barrido ~20s
+      startSweep(dur,20,20000);
+      state.auto.finishTimer = setTimeout(function(){ finishAutoDetect(); }, (dur+0.35)*1000);
+      requestAnimationFrame(autoDetectTick);
+    }
+    function cancelAutoDetect(){ if(state.auto && state.auto.active){ state.auto.active=false; if(state.auto.finishTimer){ try{ clearTimeout(state.auto.finishTimer); }catch(e){} } stopSweep(); } }
+    function autoDetectTick(){ if(!state.auto || !state.auto.active) return; var f=currentSweepFreq(); if(f){ var db=sampleDbAt(f); if(db!=null && isFinite(db)){ state.auto.samples.push({f:f, db:db}); } } requestAnimationFrame(autoDetectTick); }
+
+    function analyzeAutoSamples(samples){
+      if(!samples || samples.length<5) return null;
+      var freqs=[], vals=[];
+      for(var i=0;i<samples.length;i++){ freqs.push(samples[i].f); vals.push(samples[i].db); }
+      var sm=[], win=5;
+      for(var j=0;j<vals.length;j++){
+        var s=0,c=0;
+        for(var k=-win;k<=win;k++){ var jj=j+k; if(jj>=0 && jj<vals.length){ s+=vals[jj]; c++; } }
+        sm.push(s/c);
+      }
+      var peaks=[];
+      for(var p=1;p<sm.length-1;p++){ if(sm[p]>sm[p-1] && sm[p]>sm[p+1]) peaks.push({i:p, db:sm[p], f:freqs[p]}); }
+      if(peaks.length===0){
+        var maxDb=-1e9, idx=0;
+        for(var m=0;m<sm.length;m++){ if(sm[m]>maxDb){ maxDb=sm[m]; idx=m; } }
+        peaks=[{i:idx, db:sm[idx], f:freqs[idx]}];
+      }
+      peaks.sort(function(a,b){ return b.db - a.db; });
+
+      var chosen=[], minSep=Math.max(3, Math.floor(sm.length/40)+2);
+      for(var q=0;q<peaks.length && chosen.length<3;q++){
+        var ok=true; for(var r=0;r<chosen.length;r++){ if(Math.abs(peaks[q].i - chosen[r].i) < minSep){ ok=false; break; } }
+        if(ok) chosen.push(peaks[q]);
+      }
+      var top=chosen[0];
+      var thr=top.db - 6;
+      var iL=top.i, iR=top.i;
+      while(iL>0 && sm[iL] > thr){ iL--; }
+      while(iR<sm.length-1 && sm[iR] > thr){ iR++; }
+      var fLo=freqs[iL], fHi=freqs[iR];
+      var candFreqs = chosen.map(function(c){ return c.f; });
+      return { fPeak: top.f, fLo: fLo, fHi: fHi, candidates: candFreqs };
+    }
+
+    function finishAutoDetect(){
+      if(!state.auto) return;
+      state.auto.active=false; stopSweep();
+      if(state.auto.finishTimer){ try{ clearTimeout(state.auto.finishTimer); }catch(e){} }
+      var i=state.auto.i;
+      var res=analyzeAutoSamples(state.auto.samples);
+      if(!res){ alert('No se pudo detectar pico (interferencia/ruido). Repite la banda.'); return; }
+      state.identified[i]=res.fPeak;
+      state.bandLow[i]=res.fLo;
+      state.bandHigh[i]=res.fHi;
+      state.bandPeak[i]=res.fPeak;
+      state.bandCands[i]=res.candidates;
+
+      var lab=document.getElementById('asig-'+i); if(lab) lab.textContent=res.fPeak.toFixed(1)+' Hz';
+      var rg=document.getElementById('range-'+i); if(rg) rg.textContent=(res.fLo && res.fHi)? (Number(res.fLo).toFixed(0)+'–'+Number(res.fHi).toFixed(0)+' Hz') : '—';
+
+      var cbox=document.getElementById('cand-'+i);
+      if(cbox){
+        var html='';
+        for(var k=0;k<Math.min(3,res.candidates.length);k++){
+          var ff=res.candidates[k];
+          html += '<button class="btn secondary" data-cand="'+i+'|'+ff.toFixed(1)+'" style="padding:4px 8px; border-radius:10px; font-size:12px; margin-right:6px;">'+ff.toFixed(0)+' Hz</button>';
+        }
+        cbox.innerHTML=html;
+      }
+
+      state.guide.index++; updateGuideUI();
+      if(state.guide.index>=state.centers.length){
+        alert('¡Guía completa! Regresa todas las bandas a 0 dB (plano) y continúa al Paso 3.');
+      }
+    }
+
+    // ====== Eventos ======
+    btnInit.addEventListener('click', initAudio);
+    volumeSlider.addEventListener('input', function(e){ var v=parseFloat(e.target.value); state.volume=v; volPct.textContent=Math.round(v*100)+'%'; if(outputGain) outputGain.gain.value=v; });
+    targetSel.addEventListener('change', function(e){ state.targetDb=parseFloat(e.target.value); });
+    toggleSpectrum.addEventListener('change', function(e){ state.drawSpectrum=e.target.checked; });
+    stepButtons.forEach(function(b){ b.addEventListener('click', function(){ showStep(parseInt(b.dataset.step,10)); }); });
+
+    // Selector de micrófono
+    if (micSelect) micSelect.addEventListener('change', async function(){
+      state.micDeviceId = micSelect.value || null;
+      try { await attachMicStream(); } catch(e) {
+        alert('No se pudo cambiar de micrófono: ' + e);
+      }
+    });
+    if (refreshMicsBtn) refreshMicsBtn.addEventListener('click', listMics);
+
+    // Límite ±dB
+    if (eqRangeSel) eqRangeSel.addEventListener('change', function(){
+      var v = eqRangeSel.value;
+      if (v === 'custom') {
+        eqRangeCustom.style.display = 'inline-block';
+      } else {
+        eqRangeCustom.style.display = 'none';
+        state.eqRange = parseFloat(v);
+        var limText = document.getElementById('limText');
+        if (limText) limText.textContent = String(state.eqRange);
+        computeRecommendations(); renderRecs();
+      }
+    });
+    if (eqRangeCustom) eqRangeCustom.addEventListener('input', function(){
+      var val = parseFloat(eqRangeCustom.value);
+      if (isFinite(val) && val > 0 && val <= 24) {
+        state.eqRange = val;
+        var limText = document.getElementById('limText');
+        if (limText) limText.textContent = String(state.eqRange);
+        computeRecommendations(); renderRecs();
+      }
+    });
+
+    // Resolución (paso) y modo de redondeo
+    if (eqStepSel) eqStepSel.addEventListener('change', function(){
+      var v = eqStepSel.value;
+      if (v === 'custom') {
+        eqStepCustom.style.display = 'inline-block';
+      } else {
+        eqStepCustom.style.display = 'none';
+        state.eqStep = parseFloat(v);
+        computeRecommendations(); renderRecs();
+      }
+    });
+    if (eqStepCustom) eqStepCustom.addEventListener('input', function(){
+      var val = parseFloat(eqStepCustom.value);
+      if (isFinite(val) && val >= 0.1 && val <= 6) {
+        state.eqStep = val;
+        computeRecommendations(); renderRecs();
+      }
+    });
+    if (eqRoundSel) eqRoundSel.addEventListener('change', function(){
+      state.eqRound = eqRoundSel.value || 'nearest';
+      computeRecommendations(); renderRecs();
+    });
+
+    numBandsInput.addEventListener('change', function(){
+      state.numBands=parseInt(numBandsInput.value||'10',10);
+      state.centers=defaultCentersFor(state.numBands);
+      state.identified=Array(state.centers.length).fill(null);
+      state.measurements=Array(state.centers.length).fill(null);
+      state.recommendations=Array(state.centers.length).fill(null);
+      state.bandLow=Array(state.centers.length).fill(null);
+      state.bandHigh=Array(state.centers.length).fill(null);
+      state.bandPeak=Array(state.centers.length).fill(null);
+      state.bandCands=Array(state.centers.length).fill(null);
+      updateCentersUI();
+    });
+    useCustomChk.addEventListener('change', function(){ state.useCustom=useCustomChk.checked; customFreqsTxt.style.display=state.useCustom? 'block':'none'; parseCustom(); });
+    customFreqsTxt.addEventListener('input', parseCustom);
+    function parseCustom(){
+      if(!state.useCustom){ state.customFreqs=[]; }
+      else {
+        var parts=customFreqsTxt.value.split(/[\s,]+/).map(function(x){ return parseFloat(x); }).filter(function(x){ return isFinite(x)&&x>15&&x<24000; });
+        state.customFreqs=parts;
+      }
+      state.centers=defaultCentersFor(state.numBands);
+      state.identified=Array(state.centers.length).fill(null);
+      state.measurements=Array(state.centers.length).fill(null);
+      state.recommendations=Array(state.centers.length).fill(null);
+      state.bandLow=Array(state.centers.length).fill(null);
+      state.bandHigh=Array(state.centers.length).fill(null);
+      state.bandPeak=Array(state.centers.length).fill(null);
+      state.bandCands=Array(state.centers.length).fill(null);
+      updateCentersUI();
+    }
+
+    document.getElementById('to-2').addEventListener('click', function(){ renderIdentify(); showStep(2); state.guide.active=false; state.guide.index=0; updateGuideUI(); });
+    document.getElementById('to-3').addEventListener('click', function(){ renderMeasureGrid(); showStep(3); });
+    document.getElementById('to-4').addEventListener('click', function(){ renderRecs(); showStep(4); });
+    document.getElementById('to-5').addEventListener('click', function(){ showStep(5); });
+
+    if(startSweepBtn) startSweepBtn.addEventListener('click', function(){ startSweep(15,20,20000); });
+    if(stopSweepBtn)  stopSweepBtn.addEventListener('click', function(){ stopSweep(); });
+    if(startSweepVerify) startSweepVerify.addEventListener('click', function(){ startSweep(20,20,20000); });
+    if(stopSweepVerify)  stopSweepVerify.addEventListener('click', function(){ stopSweep(); });
+
+    function sweepTicker(){ var f=currentSweepFreq(); if(f){ var v=f.toFixed(0); if(curFreqLbl) curFreqLbl.textContent=v; if(curFreqLbl2) curFreqLbl2.textContent=v; } requestAnimationFrame(sweepTicker); } sweepTicker();
+
+    if(reminderBtn) reminderBtn.addEventListener('click', function(){ alert('Pon el ecualizador del autoestéreo en 0 dB en todas las bandas (PLANO) y mantén el volumen fijo.'); });
+    if(measureAllBtn) measureAllBtn.addEventListener('click', function(){ measureAll(); });
+    if(remeasureBtn) remeasureBtn.addEventListener('click', function(){ measureAll(); });
+
+    if(multiNoiseBtn) multiNoiseBtn.addEventListener('click', async function(){ if(!ac||!outputGain) return; var gn=ac.createGain(); gn.gain.value=state.volume*0.5; gn.connect(outputGain); var oscs=[]; currentCenters().forEach(function(f){ var o=ac.createOscillator(); o.type='sine'; o.frequency.value=f; o.connect(gn); o.start(); oscs.push(o); }); await wait(8000); oscs.forEach(function(o){ try{o.stop();}catch(e){} }); });
+
+    if(guideAutoBtn) guideAutoBtn.addEventListener('click', function(){ startAutoDetectForBand(state.guide.index); });
+    if(guideCancelBtn) guideCancelBtn.addEventListener('click', function(){ cancelAutoDetect(); });
+    if(guideRepeatBtn) guideRepeatBtn.addEventListener('click', function(){ startAutoDetectForBand(state.guide.index); });
+    if(guideSkipBtn) guideSkipBtn.addEventListener('click', function(){ cancelAutoDetect(); state.guide.index++; if(state.guide.index>=state.centers.length){ alert('Guía finalizada. Regresa todas las bandas a 0 dB (plano) y continúa al Paso 3.'); return; } updateGuideUI(); });
+
+    // Inicial
+    state.centers = defaultCentersFor(state.numBands); updateCentersUI();
+  </script>
+</body>
+</html>
 
