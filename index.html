@@ -1,5 +1,4 @@
 
-
 <!doctype html>
 <html lang="es">
 <head>
@@ -22,8 +21,8 @@
     input[type="number"], input[type="text"], select, textarea{ width: 100%; max-width: 360px; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; }
     textarea{ height: 80px; }
     .stepper{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
-    .stepper button{ background:#fff; border:1px solid #e5e7eb; color:#111; padding:8px 12px; border-radius:12px; }
     .stepper button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+    .stepper button{ background:#fff; border:1px solid #e5e7eb; color:#111; padding:8px 12px; border-radius:12px; }
     table{ width:100%; border-collapse: collapse; }
     th, td{ text-align:left; padding:8px 10px; border-bottom:1px solid #eee; font-size: 14px; }
     code.badge{ background:#eef2ff; color:#3730a3; padding:2px 6px; border-radius:8px; font-size:12px; }
@@ -42,7 +41,7 @@
     <div class="row" style="gap:16px; margin: 12px 0 16px;">
       <button class="btn" id="btn-init">Iniciar audio / Mic</button>
 
-      <!-- Selector de micrófono -->
+      <!-- Selector de micrófono (nuevo) -->
       <div class="row" style="gap:8px;">
         <label class="muted" for="micSelect">Micrófono</label>
         <select id="micSelect" style="max-width:260px;">
@@ -158,7 +157,7 @@
           <div class="pill">Frecuencia actual del barrido: <b id="curFreq">0</b> Hz</div>
         </div>
 
-        <!-- ***** MODO MANUAL (nuevo) ***** -->
+        <!-- ***** MODO MANUAL ***** -->
         <div class="row" style="margin:8px 0;">
           <button class="btn secondary" id="toggle-manual" type="button">Modo manual (tono/edición)</button>
         </div>
@@ -286,10 +285,10 @@
       bandLow:[], bandHigh:[], bandPeak:[],
       bandCands:[],
       volume:0.2, targetDb:-6, drawSpectrum:true, sweep:null,
-      eqRange: 9,
-      eqStep: 1,
-      eqRound: 'nearest',
-      micDeviceId: null,
+      eqRange: 9,                 // ±dB real del estéreo
+      eqStep: 1,                  // resolución (paso)
+      eqRound: 'nearest',         // rounding mode
+      micDeviceId: null,          // mic seleccionado
       manual:{ visible:false, index:0, freq:1000, osc:null, gn:null },
       guide:{active:false, index:0}, auto:null
     };
@@ -313,7 +312,7 @@
     var eqRoundSel = document.getElementById('eqRound');
     var micSelect = document.getElementById('micSelect');
     var refreshMicsBtn = document.getElementById('refreshMics');
-    // Modo manual refs
+    // Manual mode
     var toggleManualBtn = document.getElementById('toggle-manual');
     var manualBox = document.getElementById('manualBox');
     var manualBandLbl = document.getElementById('manualBand');
@@ -345,7 +344,6 @@
       for (var i=0;i<state.centers.length;i++){ var s=document.createElement('span'); s.className='pill'; s.textContent=state.centers[i].toFixed(1); centersWrap.appendChild(s); }
       updateGuideUI();
       if (sections[1].style.display !== 'none'){ renderIdentify(); }
-      // actualizar totales del manual
       if (manualTotalLbl) manualTotalLbl.textContent = String(state.centers.length);
     }
     function showStep(n){ state.step=n; stepButtons.forEach(function(b){ b.classList.toggle('active', parseInt(b.dataset.step,10)===n); }); sections.forEach(function(s,i){ s.style.display=(i+1===n)?'block':'none'; }); }
@@ -361,7 +359,7 @@
       var q = v/step, qi;
       if (mode === 'up') qi = Math.ceil(q);
       else if (mode === 'down') qi = Math.floor(q);
-      else qi = Math.round(q); // nearest
+      else qi = Math.round(q);
       var out = qi * step;
       if (Math.abs(out) < 1e-6) out = 0;
       return Math.round(out*100)/100;
@@ -457,7 +455,7 @@
     async function measureDbAt(freq,seconds){ if(seconds===undefined) seconds=1.2; if(!ac||!analyser) return null; var N=analyser.frequencyBinCount, arr=new Float32Array(N), idx=binForFreq(freq), windowBins=3, tEnd=ac.currentTime+seconds; var sum=0,count=0; while(ac.currentTime<tEnd){ analyser.getFloatFrequencyData(arr); var local=0; for(var k=-windowBins;k<=windowBins;k++){ var ii=Math.max(0,Math.min(N-1,idx+k)); local+=arr[ii]; } local/=(windowBins*2+1); sum+=local; count++; await wait(50);} return count>0? sum/count : null; }
     async function measureAll(){ var freqs=currentCenters(); for(var i=0;i<freqs.length;i++){ await playToneOnce(freqs[i],1.5); var d=await measureDbAt(freqs[i],1.2); state.measurements[i]=d; renderMeasureGrid(); } computeRecommendations(); renderRecs(); }
 
-    // ====== Recomendaciones (con límite ±dB + cuantización a paso) ======
+    // ====== Recomendaciones ======
     function computeRecommendations(){
       var vals=state.measurements.filter(function(x){ return x!=null; });
       if(!vals.length) return;
@@ -508,7 +506,7 @@
       requestAnimationFrame(drawSpectrumLoop);
     }
 
-    // ====== Paso 2: tarjetas con candidatos (ahora con "Editar") ======
+    // ====== Paso 2: tarjetas con candidatos (con "Editar") ======
     function renderIdentify(){
       identifyGrid.innerHTML='';
       state.centers.forEach(function(f,i){
@@ -524,7 +522,6 @@
         }
         candHtml += '</div>';
 
-        // Botón editar banda (abre modo manual con esa banda)
         var editHtml = '<div class="row" style="gap:8px; margin-top:8px;">'
           + '<button class="btn" data-edit="'+i+'">Editar (manual)</button>'
           + '<button class="btn secondary" data-toneonce="'+i+'">Tono '+assigned.toFixed(0)+' Hz</button>'
@@ -556,7 +553,6 @@
           var i=parseInt(t.dataset.edit,10);
           openManual(i);
         }
-        if (t.dataset.ton eonce){ /* guard no-op si typo */ }
         if (t.dataset.toneonce){
           var j=parseInt(t.dataset.toneonce,10);
           var f = (state.identified[j]!=null? state.identified[j] : state.centers[j]);
@@ -603,7 +599,7 @@
       });
     }
 
-    // ====== Auto detección por mic (barrido, guía) ======
+    // ====== Auto detección por mic ======
     var freqBuf=null;
     function ensureFreqBuf(){ if(!analyser) return; if(!freqBuf || freqBuf.length!==analyser.frequencyBinCount) freqBuf=new Float32Array(analyser.frequencyBinCount); }
     function sampleDbAt(freq){ if(!analyser) return null; ensureFreqBuf(); analyser.getFloatFrequencyData(freqBuf); var N=analyser.frequencyBinCount, idx=binForFreq(freq), windowBins=3, sum=0; for(var k=-windowBins;k<=windowBins;k++){ var ii=Math.max(0,Math.min(N-1,idx+k)); sum+=freqBuf[ii]; } return sum/(windowBins*2+1); }
@@ -616,7 +612,7 @@
       if(!ac||!analyser){ alert('Activa el audio/mic primero.'); return; }
       state.auto={ i:i, active:true, samples:[], finishTimer:null };
       var base = state.centers[i] || 100;
-      var dur = base < 80 ? 40 : base < 160 ? 30 : 20;
+      var dur = base < 80 ? 40 : base < 160 ? 30 : 20; // más tiempo en graves
       startSweep(dur,20,20000);
       state.auto.finishTimer = setTimeout(function(){ finishAutoDetect(); }, (dur+0.35)*1000);
       requestAnimationFrame(autoDetectTick);
@@ -690,7 +686,7 @@
       }
     }
 
-    // ====== MODO MANUAL: lógica ======
+    // ====== MODO MANUAL ======
     function openManual(i){
       state.manual.index = clamp(i, 0, state.centers.length-1);
       if (!state.manual.visible){
@@ -722,7 +718,7 @@
       osc.type = 'sine';
       osc.frequency.setValueAtTime(state.manual.freq, ac.currentTime);
       var gn = ac.createGain();
-      gn.gain.value = state.volume; // usa mismo volumen del UI
+      gn.gain.value = state.volume;
       osc.connect(gn).connect(outputGain);
       osc.start();
       state.manual.osc = osc;
@@ -736,7 +732,6 @@
         state.manual.gn = null;
       }
     }
-
     function assignManualToBand(){
       var idx = state.manual.index;
       var f = parseFloat(manualCtr.value);
@@ -749,7 +744,6 @@
       state.bandHigh[idx] = isFinite(hi)? hzClamp(hi) : null;
       state.bandPeak[idx] = f;
 
-      // refresca tarjeta visible
       var lab=document.getElementById('asig-'+idx);
       if(lab) lab.textContent = f.toFixed(1)+' Hz';
       var rg=document.getElementById('range-'+idx);
@@ -885,14 +879,12 @@
         stopManualTone();
       }
     });
-
     if (manualPrev) manualPrev.addEventListener('click', function(){
       var i = state.manual.index-1; if (i<0) i=0; openManual(i);
     });
     if (manualNext) manualNext.addEventListener('click', function(){
       var i = state.manual.index+1; if (i>state.centers.length-1) i=state.centers.length-1; openManual(i);
     });
-
     if (manualCtr) manualCtr.addEventListener('input', function(){
       var f = parseFloat(manualCtr.value); if(!isFinite(f)) return;
       f = hzClamp(f);
@@ -908,7 +900,6 @@
       if (manualHzLbl) manualHzLbl.textContent = Math.round(f)+' Hz';
       if (state.manual.osc) state.manual.osc.frequency.setValueAtTime(f, ac.currentTime);
     });
-
     if (manualToneStart) manualToneStart.addEventListener('click', startManualTone);
     if (manualToneStop) manualToneStop.addEventListener('click', stopManualTone);
     if (manualAssign) manualAssign.addEventListener('click', function(){ assignManualToBand(); });
@@ -918,5 +909,6 @@
   </script>
 </body>
 </html>
+
 
 
