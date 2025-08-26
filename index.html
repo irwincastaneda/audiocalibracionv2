@@ -324,10 +324,10 @@
       micSource = ac.createMediaStreamSource(micStream);
       if (!analyser) {
         analyser = ac.createAnalyser();
-        analyser.fftSize = 16384;
-        analyser.minDecibels = -120;
+        analyser.fftSize = 32768;            // antes 16384
+        analyser.minDecibels = -130;         // antes -120
         analyser.maxDecibels = 0;
-        analyser.smoothingTimeConstant = 0.5;
+        analyser.smoothingTimeConstant = 0.30; // antes 0.5
       }
       micSource.connect(analyser);
     }
@@ -529,7 +529,8 @@
     function startAutoDetectForBand(i){
       if(!ac||!analyser){ alert('Activa el audio/mic primero.'); return; }
       state.auto={ i:i, active:true, samples:[], finishTimer:null };
-      var dur=20; // barrido ~20s
+      var base = state.centers[i] || 100;
+      var dur = base < 80 ? 40 : base < 160 ? 30 : 20; // más tiempo en graves
       startSweep(dur,20,20000);
       state.auto.finishTimer = setTimeout(function(){ finishAutoDetect(); }, (dur+0.35)*1000);
       requestAnimationFrame(autoDetectTick);
