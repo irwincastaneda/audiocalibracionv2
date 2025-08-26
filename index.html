@@ -1,16 +1,4 @@
-¡Hecho! Te dejo el archivo completo con el “Modo manual (tono/edición)” en el Paso 2.
-No toqué nada del flujo existente: solo agregué UI y funciones nuevas y compatibles para:
 
-Tocar un tono continuo y mover la frecuencia con un slider logarítmico o con un campo numérico.
-
-Asignar manualmente el centro de la banda y, opcionalmente, el rango (-6 dB) Low/High.
-
-Editar cualquier banda desde su tarjeta (“Editar”) o ir banda anterior/siguiente.
-
-Encender/apagar tono manual sin interferir con el barrido (paro el sweep si enciendes el tono manual).
-
-
-Pega esto tal cual:
 
 <!doctype html>
 <html lang="es">
@@ -931,16 +919,4 @@ Pega esto tal cual:
 </body>
 </html>
 
-Notas rápidas:
-
-El botón “Modo manual (tono/edición)” abre una tarjeta con el slider log y campos de Centro/Low/High.
-
-“▶ Tono manual” enciende un seno continuo que sigue el slider/campo; “■ Detener” lo apaga.
-
-“Guardar en Banda” actualiza la tarjeta de esa banda (Asignado y Rango).
-
-Cada tarjeta de banda ahora tiene “Editar (manual)” para saltar a esa banda en el editor, y un botón “Tono X Hz” rápido (1.5 s) que no modifica nada.
-
-
-¿Quieres que el slider del modo manual parta por la frecuencia estimada de la banda actual cada vez (ahora lo hace), o que recuerde la última frecuencia usada globalmente?
 
