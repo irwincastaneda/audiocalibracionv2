@@ -1,3 +1,17 @@
+¡Hecho! Te dejo el archivo completo con el “Modo manual (tono/edición)” en el Paso 2.
+No toqué nada del flujo existente: solo agregué UI y funciones nuevas y compatibles para:
+
+Tocar un tono continuo y mover la frecuencia con un slider logarítmico o con un campo numérico.
+
+Asignar manualmente el centro de la banda y, opcionalmente, el rango (-6 dB) Low/High.
+
+Editar cualquier banda desde su tarjeta (“Editar”) o ir banda anterior/siguiente.
+
+Encender/apagar tono manual sin interferir con el barrido (paro el sweep si enciendes el tono manual).
+
+
+Pega esto tal cual:
+
 <!doctype html>
 <html lang="es">
 <head>
@@ -40,7 +54,7 @@
     <div class="row" style="gap:16px; margin: 12px 0 16px;">
       <button class="btn" id="btn-init">Iniciar audio / Mic</button>
 
-      <!-- Selector de micrófono (nuevo, no rompe nada existente) -->
+      <!-- Selector de micrófono -->
       <div class="row" style="gap:8px;">
         <label class="muted" for="micSelect">Micrófono</label>
         <select id="micSelect" style="max-width:260px;">
@@ -139,7 +153,7 @@
       <!-- Paso 2 -->
       <section id="step-2" style="display:none;">
         <h2>2) Identifica cada banda (micrófono)</h2>
-        <p class="muted">Para mapear tu ecualizador real: <b>baja TODAS las bandas al mínimo</b>. Luego, por banda: <b>sube solo esa banda al máximo</b> y pulsa <b>Auto detectar (mic)</b>. La app hace un barrido y detecta el <i>pico</i> y el <i>rango (-6 dB)</i> automáticamente. Al terminar, pon todo en 0 dB y continúa al Paso 3.</p>
+        <p class="muted">Para mapear tu ecualizador real: <b>baja TODAS las bandas al mínimo</b>. Luego, por banda: <b>sube solo esa banda al máximo</b> y pulsa <b>Auto detectar (mic)</b> o usa el <b>Modo manual</b> para fijar el centro y el rango (-6 dB). Al terminar, pon todo en 0 dB y continúa al Paso 3.</p>
 
         <div class="card" id="guideBox" style="margin-bottom:10px;">
           <div class="row" style="justify-content:space-between;">
@@ -155,6 +169,52 @@
           </div>
           <div class="pill">Frecuencia actual del barrido: <b id="curFreq">0</b> Hz</div>
         </div>
+
+        <!-- ***** MODO MANUAL (nuevo) ***** -->
+        <div class="row" style="margin:8px 0;">
+          <button class="btn secondary" id="toggle-manual" type="button">Modo manual (tono/edición)</button>
+        </div>
+
+        <div class="card" id="manualBox" style="display:none; margin-bottom:10px;">
+          <div class="row" style="justify-content:space-between; align-items:flex-end;">
+            <div>
+              <div class="pill">Editando Banda: <b id="manualBand">1</b> / <span id="manualTotal">10</span></div>
+              <div class="muted" style="font-size:12px; margin-top:4px;">Mueve la frecuencia con el slider o escribe el valor. Puedes fijar Low/High (-6 dB) si lo deseas.</div>
+            </div>
+            <div class="row" style="gap:6px;">
+              <button class="btn" id="manual-prev" type="button">◀ Anterior</button>
+              <button class="btn" id="manual-next" type="button">Siguiente ▶</button>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:10px; gap:16px;">
+            <div>
+              <label>Centro (Hz)</label>
+              <input type="number" id="manualCtr" min="20" max="20000" step="1" value="1000" />
+            </div>
+            <div>
+              <label>Low -6 dB (Hz) <span class="muted">(opcional)</span></label>
+              <input type="number" id="manualLo" min="20" max="20000" step="1" placeholder="p.ej. 800" />
+            </div>
+            <div>
+              <label>High -6 dB (Hz) <span class="muted">(opcional)</span></label>
+              <input type="number" id="manualHi" min="20" max="20000" step="1" placeholder="p.ej. 1200" />
+            </div>
+          </div>
+
+          <div class="row" style="gap:8px; margin-top:10px;">
+            <label class="muted">Frecuencia (slider log)</label>
+            <input type="range" id="manualSlider" min="0" max="1000" step="1" value="700" style="min-width:320px;" />
+            <span class="pill" id="manualHzLbl">1000 Hz</span>
+          </div>
+
+          <div class="row" style="gap:8px; margin-top:10px;">
+            <button class="btn ok" id="manual-tone-start" type="button">▶ Tono manual</button>
+            <button class="btn secondary" id="manual-tone-stop" type="button">■ Detener</button>
+            <button class="btn" id="manual-assign" type="button">Guardar en Banda</button>
+          </div>
+        </div>
+        <!-- ***** FIN MODO MANUAL ***** -->
 
         <div id="identifyGrid" class="grid"></div>
         <div style="margin-top:10px;" class="row">
@@ -238,10 +298,11 @@
       bandLow:[], bandHigh:[], bandPeak:[],
       bandCands:[],
       volume:0.2, targetDb:-6, drawSpectrum:true, sweep:null,
-      eqRange: 9,                 // límite real del estéreo (±dB)
-      eqStep: 1,                  // resolución (paso) en dB
-      eqRound: 'nearest',         // modo de redondeo: nearest | down | up
-      micDeviceId: null,          // NUEVO: id de mic seleccionado
+      eqRange: 9,
+      eqStep: 1,
+      eqRound: 'nearest',
+      micDeviceId: null,
+      manual:{ visible:false, index:0, freq:1000, osc:null, gn:null },
       guide:{active:false, index:0}, auto:null
     };
 
@@ -264,6 +325,22 @@
     var eqRoundSel = document.getElementById('eqRound');
     var micSelect = document.getElementById('micSelect');
     var refreshMicsBtn = document.getElementById('refreshMics');
+    // Modo manual refs
+    var toggleManualBtn = document.getElementById('toggle-manual');
+    var manualBox = document.getElementById('manualBox');
+    var manualBandLbl = document.getElementById('manualBand');
+    var manualTotalLbl = document.getElementById('manualTotal');
+    var manualCtr = document.getElementById('manualCtr');
+    var manualLo = document.getElementById('manualLo');
+    var manualHi = document.getElementById('manualHi');
+    var manualSlider = document.getElementById('manualSlider');
+    var manualHzLbl = document.getElementById('manualHzLbl');
+    var manualPrev = document.getElementById('manual-prev');
+    var manualNext = document.getElementById('manual-next');
+    var manualToneStart = document.getElementById('manual-tone-start');
+    var manualToneStop = document.getElementById('manual-tone-stop');
+    var manualAssign = document.getElementById('manual-assign');
+
     var spectrum=$('#spectrum'); var g = spectrum ? spectrum.getContext('2d') : null;
 
     // ====== Helpers ======
@@ -280,11 +357,14 @@
       for (var i=0;i<state.centers.length;i++){ var s=document.createElement('span'); s.className='pill'; s.textContent=state.centers[i].toFixed(1); centersWrap.appendChild(s); }
       updateGuideUI();
       if (sections[1].style.display !== 'none'){ renderIdentify(); }
+      // actualizar totales del manual
+      if (manualTotalLbl) manualTotalLbl.textContent = String(state.centers.length);
     }
     function showStep(n){ state.step=n; stepButtons.forEach(function(b){ b.classList.toggle('active', parseInt(b.dataset.step,10)===n); }); sections.forEach(function(s,i){ s.style.display=(i+1===n)?'block':'none'; }); }
     function currentCenters(){ return state.centers.map(function(f,i){ return (state.identified[i]!=null? state.identified[i] : f); }); }
     function prettyDb(x){ return (x==null || !isFinite(x))? '—' : x.toFixed(1)+' dB'; }
     function binForFreq(f){ var N=analyser.frequencyBinCount, binWidth=sampleRate/(2*N); var idx=Math.round(f/binWidth); if(idx<0) idx=0; if(idx>N-1) idx=N-1; return idx; }
+    function hzClamp(f){ return clamp(f, 20, 20000); }
 
     // Redondeo a paso
     function quantize(v, step, mode){
@@ -295,13 +375,16 @@
       else if (mode === 'down') qi = Math.floor(q);
       else qi = Math.round(q); // nearest
       var out = qi * step;
-      if (Math.abs(out) < 1e-6) out = 0; // evita -0
-      return Math.round(out*100)/100;   // 2 decimales máx
+      if (Math.abs(out) < 1e-6) out = 0;
+      return Math.round(out*100)/100;
     }
+
+    // Slider log: 0..1000 -> 20..20000 Hz
+    function sliderToHz(v){ var t=v/1000; return 20 * Math.pow(20000/20, t); }
+    function hzToSlider(f){ var ff=hzClamp(f); var t=Math.log(ff/20)/Math.log(20000/20); return Math.round(t*1000); }
 
     // ====== Micrófono: adjuntar y listar ======
     async function attachMicStream() {
-      // Cierra stream previo
       if (micStream) {
         try { micStream.getTracks().forEach(t => t.stop()); } catch(e) {}
         micStream = null;
@@ -319,15 +402,14 @@
       };
       micStream = await navigator.mediaDevices.getUserMedia(constraints);
 
-      // Reconecta analyser
       try { if (micSource) micSource.disconnect(); } catch(e){}
       micSource = ac.createMediaStreamSource(micStream);
       if (!analyser) {
         analyser = ac.createAnalyser();
-        analyser.fftSize = 32768;            // antes 16384
-        analyser.minDecibels = -130;         // antes -120
+        analyser.fftSize = 32768;
+        analyser.minDecibels = -130;
         analyser.maxDecibels = 0;
-        analyser.smoothingTimeConstant = 0.30; // antes 0.5
+        analyser.smoothingTimeConstant = 0.30;
       }
       micSource.connect(analyser);
     }
@@ -339,14 +421,14 @@
         if (!micSelect) return;
         var current = state.micDeviceId || '';
         micSelect.innerHTML = '<option value="">(predeterminado)</option>';
-        mics.forEach(d => {
+        mics.forEach(function(d, idx){
           var opt = document.createElement('option');
           opt.value = d.deviceId;
-          opt.textContent = d.label || ('Micrófono ' + (micSelect.length));
+          opt.textContent = d.label || ('Micrófono ' + (idx+1));
           micSelect.appendChild(opt);
         });
         if (current) {
-          var exists = mics.some(d => d.deviceId === current);
+          var exists = mics.some(function(d){ return d.deviceId === current; });
           micSelect.value = exists ? current : '';
           if (!exists) state.micDeviceId = null;
         }
@@ -360,8 +442,8 @@
       outputGain = ac.createGain(); outputGain.gain.value=state.volume; outputGain.connect(ac.destination);
 
       try{
-        await attachMicStream();         // usa el mic seleccionado (o predeterminado)
-        await listMics();                // pobla el selector tras permiso
+        await attachMicStream();
+        await listMics();
         if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
           navigator.mediaDevices.addEventListener('devicechange', listMics);
         }
@@ -438,7 +520,7 @@
       requestAnimationFrame(drawSpectrumLoop);
     }
 
-    // ====== Paso 2: tarjetas con candidatos ======
+    // ====== Paso 2: tarjetas con candidatos (ahora con "Editar") ======
     function renderIdentify(){
       identifyGrid.innerHTML='';
       state.centers.forEach(function(f,i){
@@ -454,6 +536,12 @@
         }
         candHtml += '</div>';
 
+        // Botón editar banda (abre modo manual con esa banda)
+        var editHtml = '<div class="row" style="gap:8px; margin-top:8px;">'
+          + '<button class="btn" data-edit="'+i+'">Editar (manual)</button>'
+          + '<button class="btn secondary" data-toneonce="'+i+'">Tono '+assigned.toFixed(0)+' Hz</button>'
+          + '</div>';
+
         div.innerHTML =
           '\n<div class="row" style="justify-content:space-between;">'
           +'<div><b>Banda '+(i+1)+'</b></div>'
@@ -461,12 +549,12 @@
           +'</div>'
           +'<div class="muted" style="margin-top:6px; font-size:13px;">Asignado: <b id="asig-'+i+'">'+assigned.toFixed(1)+' Hz</b></div>'
           +'<div class="muted" style="margin-top:4px; font-size:12px;">Rango (-6 dB): <b id="range-'+i+'">'+rangeTxt+'</b></div>'
-          + candHtml;
+          + candHtml + editHtml;
 
         identifyGrid.appendChild(div);
       });
 
-      identifyGrid.onclick = function(e){
+      identifyGrid.onclick = async function(e){
         var t=e.target; if (!t || !t.dataset) return;
         if (t.dataset.cand){
           var parts=t.dataset.cand.split('|');
@@ -475,6 +563,16 @@
           state.identified[bi]=ff;
           var lab=document.getElementById('asig-'+bi);
           if(lab) lab.textContent = ff.toFixed(1)+' Hz';
+        }
+        if (t.dataset.edit){
+          var i=parseInt(t.dataset.edit,10);
+          openManual(i);
+        }
+        if (t.dataset.ton eonce){ /* guard no-op si typo */ }
+        if (t.dataset.toneonce){
+          var j=parseInt(t.dataset.toneonce,10);
+          var f = (state.identified[j]!=null? state.identified[j] : state.centers[j]);
+          await playToneOnce(f,1.5);
         }
       };
 
@@ -530,7 +628,7 @@
       if(!ac||!analyser){ alert('Activa el audio/mic primero.'); return; }
       state.auto={ i:i, active:true, samples:[], finishTimer:null };
       var base = state.centers[i] || 100;
-      var dur = base < 80 ? 40 : base < 160 ? 30 : 20; // más tiempo en graves
+      var dur = base < 80 ? 40 : base < 160 ? 30 : 20;
       startSweep(dur,20,20000);
       state.auto.finishTimer = setTimeout(function(){ finishAutoDetect(); }, (dur+0.35)*1000);
       requestAnimationFrame(autoDetectTick);
@@ -578,7 +676,7 @@
       if(state.auto.finishTimer){ try{ clearTimeout(state.auto.finishTimer); }catch(e){} }
       var i=state.auto.i;
       var res=analyzeAutoSamples(state.auto.samples);
-      if(!res){ alert('No se pudo detectar pico (interferencia/ruido). Repite la banda.'); return; }
+      if(!res){ alert('No se pudo detectar pico (interferencia/ruido). Repite la banda o usa el modo manual.'); return; }
       state.identified[i]=res.fPeak;
       state.bandLow[i]=res.fLo;
       state.bandHigh[i]=res.fHi;
@@ -601,6 +699,75 @@
       state.guide.index++; updateGuideUI();
       if(state.guide.index>=state.centers.length){
         alert('¡Guía completa! Regresa todas las bandas a 0 dB (plano) y continúa al Paso 3.');
+      }
+    }
+
+    // ====== MODO MANUAL: lógica ======
+    function openManual(i){
+      state.manual.index = clamp(i, 0, state.centers.length-1);
+      if (!state.manual.visible){
+        state.manual.visible = true;
+        if (manualBox) manualBox.style.display = 'block';
+      }
+      var idx=state.manual.index;
+      var f = (state.identified[idx]!=null? state.identified[idx] : state.centers[idx]);
+      var lo = state.bandLow[idx];
+      var hi = state.bandHigh[idx];
+
+      if (manualBandLbl) manualBandLbl.textContent = String(idx+1);
+      if (manualTotalLbl) manualTotalLbl.textContent = String(state.centers.length);
+
+      state.manual.freq = hzClamp(f);
+      if (manualCtr) manualCtr.value = Math.round(state.manual.freq);
+      if (manualSlider) manualSlider.value = hzToSlider(state.manual.freq);
+      if (manualHzLbl) manualHzLbl.textContent = Math.round(state.manual.freq) + ' Hz';
+
+      manualLo.value = (lo!=null? Math.round(lo) : '');
+      manualHi.value = (hi!=null? Math.round(hi) : '');
+    }
+
+    function startManualTone(){
+      if(!ac||!outputGain) return;
+      stopSweep(); // por si había sweep
+      if (state.manual.osc) return; // ya sonando
+      var osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(state.manual.freq, ac.currentTime);
+      var gn = ac.createGain();
+      gn.gain.value = state.volume; // usa mismo volumen del UI
+      osc.connect(gn).connect(outputGain);
+      osc.start();
+      state.manual.osc = osc;
+      state.manual.gn = gn;
+    }
+    function stopManualTone(){
+      if(state.manual && state.manual.osc){
+        try{ state.manual.osc.stop(); }catch(e){}
+        try{ state.manual.osc.disconnect(); }catch(e){}
+        state.manual.osc = null;
+        state.manual.gn = null;
+      }
+    }
+
+    function assignManualToBand(){
+      var idx = state.manual.index;
+      var f = parseFloat(manualCtr.value);
+      if (!isFinite(f)) return;
+      f = hzClamp(f);
+      state.identified[idx] = f;
+      var lo = parseFloat(manualLo.value);
+      var hi = parseFloat(manualHi.value);
+      state.bandLow[idx]  = isFinite(lo)? hzClamp(lo) : null;
+      state.bandHigh[idx] = isFinite(hi)? hzClamp(hi) : null;
+      state.bandPeak[idx] = f;
+
+      // refresca tarjeta visible
+      var lab=document.getElementById('asig-'+idx);
+      if(lab) lab.textContent = f.toFixed(1)+' Hz';
+      var rg=document.getElementById('range-'+idx);
+      if(rg){
+        var txt = (isFinite(lo)&&isFinite(hi)) ? (Math.round(hzClamp(lo))+'–'+Math.round(hzClamp(hi))+' Hz') : '—';
+        rg.textContent = txt;
       }
     }
 
@@ -720,9 +887,60 @@
     if(guideRepeatBtn) guideRepeatBtn.addEventListener('click', function(){ startAutoDetectForBand(state.guide.index); });
     if(guideSkipBtn) guideSkipBtn.addEventListener('click', function(){ cancelAutoDetect(); state.guide.index++; if(state.guide.index>=state.centers.length){ alert('Guía finalizada. Regresa todas las bandas a 0 dB (plano) y continúa al Paso 3.'); return; } updateGuideUI(); });
 
+    // ====== Eventos modo manual ======
+    if (toggleManualBtn) toggleManualBtn.addEventListener('click', function(){
+      state.manual.visible = !state.manual.visible;
+      if (manualBox) manualBox.style.display = state.manual.visible ? 'block' : 'none';
+      if (state.manual.visible){
+        openManual(state.manual.index || 0);
+      } else {
+        stopManualTone();
+      }
+    });
+
+    if (manualPrev) manualPrev.addEventListener('click', function(){
+      var i = state.manual.index-1; if (i<0) i=0; openManual(i);
+    });
+    if (manualNext) manualNext.addEventListener('click', function(){
+      var i = state.manual.index+1; if (i>state.centers.length-1) i=state.centers.length-1; openManual(i);
+    });
+
+    if (manualCtr) manualCtr.addEventListener('input', function(){
+      var f = parseFloat(manualCtr.value); if(!isFinite(f)) return;
+      f = hzClamp(f);
+      state.manual.freq = f;
+      if (manualSlider) manualSlider.value = hzToSlider(f);
+      if (manualHzLbl) manualHzLbl.textContent = Math.round(f)+' Hz';
+      if (state.manual.osc) state.manual.osc.frequency.setValueAtTime(f, ac.currentTime);
+    });
+    if (manualSlider) manualSlider.addEventListener('input', function(){
+      var f = sliderToHz(parseInt(manualSlider.value,10));
+      state.manual.freq = f;
+      if (manualCtr) manualCtr.value = Math.round(f);
+      if (manualHzLbl) manualHzLbl.textContent = Math.round(f)+' Hz';
+      if (state.manual.osc) state.manual.osc.frequency.setValueAtTime(f, ac.currentTime);
+    });
+
+    if (manualToneStart) manualToneStart.addEventListener('click', startManualTone);
+    if (manualToneStop) manualToneStop.addEventListener('click', stopManualTone);
+    if (manualAssign) manualAssign.addEventListener('click', function(){ assignManualToBand(); });
+
     // Inicial
     state.centers = defaultCentersFor(state.numBands); updateCentersUI();
   </script>
 </body>
 </html>
+
+Notas rápidas:
+
+El botón “Modo manual (tono/edición)” abre una tarjeta con el slider log y campos de Centro/Low/High.
+
+“▶ Tono manual” enciende un seno continuo que sigue el slider/campo; “■ Detener” lo apaga.
+
+“Guardar en Banda” actualiza la tarjeta de esa banda (Asignado y Rango).
+
+Cada tarjeta de banda ahora tiene “Editar (manual)” para saltar a esa banda en el editor, y un botón “Tono X Hz” rápido (1.5 s) que no modifica nada.
+
+
+¿Quieres que el slider del modo manual parta por la frecuencia estimada de la banda actual cada vez (ahora lo hace), o que recuerde la última frecuencia usada globalmente?
 
